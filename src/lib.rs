@@ -64,4 +64,159 @@ impl<P: Pipe> Parser<P> for RegexParser {
     }
 }
 
-parser_plugin!(RegexParserBuilder<LogParser>);
+native_parser_proxy!(RegexParserBuilder<LogParser>);
+
+macro_rules! u8_to_c_str {
+    ($value:expr) => {
+        $value as *const _ as *const i8,
+    }
+}
+
+macro_rules! count_exprs {
+    () => (0);
+    ($head:expr) => (1);
+    ($head:expr, $($tail:expr),*) => (1 + count_exprs!($($tail),*));
+}
+
+// module_info!(
+//     canonical_name => "regex-parser\0",
+//     version => "3.8.0alpha0\0",
+//     description => "A regex parser for syslog-ng\0",
+//     core_revision => "3.8\0",
+//     plugins => [
+//         parser_plugin!(
+//             name => "regex-rs\0",
+//             builder => RegexParserBuilder<LogParser>
+//         )
+//     ]
+// );
+
+// https://danielkeep.github.io/tlborm/book/blk-counting.html#recursion
+//macro_rules! count_tts {
+//    () => {0usize};
+//    ($_head:tt $($tail:tt)*) => {1usize + count_tts!($($tail)*)};
+//}
+
+macro_rules! replace_expr {
+    ($_t:tt $sub:expr) => {$sub};
+}
+
+macro_rules! count_tts {
+    ($($tts:tt)*) => {0usize $(+ replace_expr!($tts 1usize))*};
+}
+
+macro_rules! module_info {
+    (
+        canonical_name: $canonical_name:expr,
+        version: $version:expr,
+        description: $description:expr,
+        core_revision: $core_revision:expr,
+        module_init: $module_init:expr,
+        plugins: [ $( { $($plugins:expr)* } ),* $(,)* ] $(,)*
+    ) => {
+        use syslog_ng_common::sys::module::*;
+        use syslog_ng_common::sys::GlobalConfig;
+        use std::os::raw::{c_int, c_void};
+
+        #[link(name = "syslog-ng-native-connector")]
+        extern "C" {
+            static native_parser: CfgParser;
+        }
+
+        const PLUGINS_LEN: usize = count_tts!($( ($($plugins)*) )*);
+
+        pub static PLUGINS: [Plugin; PLUGINS_LEN] = [ $( $($plugins)* ),* ];
+
+        #[no_mangle]
+        #[allow(non_upper_case_globals)]
+        pub static module_info: ModuleInfo = ModuleInfo {
+            canonical_name: $canonical_name as *const _ as *const i8,
+            version: $version as *const _ as *const i8,
+            description: $description as *const _ as *const i8,
+            core_revision: $core_revision as *const _ as *const i8,
+            plugins: &PLUGINS[0] as *const Plugin,
+            plugins_len: PLUGINS_LEN as i32,
+            preference: 0,
+        };
+
+        #[no_mangle]
+        pub fn $module_init(cfg: *mut GlobalConfig, _: *mut CfgArgs) -> c_int
+        {
+            unsafe { plugin_register(cfg, PLUGINS.as_ptr(), PLUGINS.len() as i32); }
+            1
+        }
+    };
+}
+
+macro_rules! parser_plugin {
+    (
+        name: $name:expr,
+        //builder: $builder:ty $(,)*
+    ) => {
+        Plugin {
+            _type: TokenType::ContextParser as i32,
+            name: $name as *const _ as *const i8,
+            parser: &native_parser,
+            setup_context: 0 as *const c_void,
+            construct: 0 as *const c_void,
+            free_fn: 0 as *const c_void,
+        }
+    };
+}
+
+module_info!(
+    canonical_name: b"regex-parser\0",
+    version: b"3.8.0alpha0",
+    description: b"regex parser for syslog-ng\0",
+    core_revision: b"3.8\0",
+    module_init: regex_parser_module_init,
+    plugins: [
+        parser_plugin!(
+            name: b"regex-rs\0",
+        )
+    ]
+);
+
+//
+//
+//
+// use syslog_ng_common::sys::module::*;
+// use syslog_ng_common::sys::GlobalConfig;
+// use std::os::raw::{c_int, c_void};
+//
+// #[link(name = "syslog-ng-native-connector")]
+// extern "C" {
+//     static native_parser: CfgParser;
+// }
+//
+// const PLUGINS_LEN: usize = 1;
+//
+// pub static PLUGINS: [Plugin; PLUGINS_LEN] = [
+//     Plugin {
+//         _type: TokenType::ContextParser as i32,
+//         name: b"regex-rs\0" as *const _ as *const i8,
+//         parser: &native_parser,
+//         setup_context: 0 as *const c_void,
+//         construct: 0 as *const c_void,
+//         free_fn: 0 as *const c_void,
+//     },
+// ];
+//
+// #[no_mangle]
+// #[allow(non_upper_case_globals)]
+// pub static module_info: ModuleInfo = ModuleInfo {
+//     canonical_name: b"regex-parser\0" as *const _ as *const i8,
+//     version: b"3.8.0alpha0\0" as *const _ as *const i8,
+//     description: b"description\0" as *const _ as *const i8,
+//     core_revision: b"3.8\0" as *const _ as *const i8,
+//     plugins: &PLUGINS as *const _ as *const Plugin,
+//     plugins_len: PLUGINS_LEN as i32,
+//     preference: 0
+// };
+//
+// #[no_mangle]
+// pub fn regex_parser_module_init(cfg: *mut GlobalConfig, _: *mut CfgArgs) -> c_int
+// {
+//     unsafe { plugin_register(cfg, PLUGINS.as_ptr(), PLUGINS.len() as i32); }
+//     1
+// }
